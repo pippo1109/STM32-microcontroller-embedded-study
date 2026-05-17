@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#include <enconder_aux.h>
+#include <encoder_aux.h>
 
 /*
  * Controle de Motor PWM + Aquisição de Dados do Encoder
