@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#include "enconder_aux.h"
+#include <enconder_aux.h>
 
 /*
  * Controle de Motor PWM + Aquisição de Dados do Encoder
@@ -24,7 +24,7 @@ void setup() {
 
 void loop() {
   lerComandos();
-  motorLoop();
+ // motorLoop();
 
 }
 
