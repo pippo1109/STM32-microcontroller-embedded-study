@@ -7,10 +7,6 @@ int potencia = 0;                      // Potência em % (0-100)
 // ===== SENSOR ENCODER =====
 const int ENCODER_PIN = 2;             // Pino com interrupção (INT0)
 
-// Diâmetro do círculo dos ímãs (mm) e raio em metros (para velocidade tangencial)
-const float DIAMETRO_MAGNETOS_MM = 52.5; 
-const float RAIO_MAGNETOS_M = (DIAMETRO_MAGNETOS_MM / 2.0) / 1000.0; // m
-
 // ===== VARIÁVEIS DE TEMPO =====
 unsigned long tempo_anterior = 0;
 unsigned long tempo_inicio = 0;

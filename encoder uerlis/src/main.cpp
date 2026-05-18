@@ -24,6 +24,7 @@ void setup() {
 
 void loop() {
   lerComandos();
+  enviarDados();
  // motorLoop();
 
 }

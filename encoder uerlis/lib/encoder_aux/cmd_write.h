@@ -2,22 +2,39 @@
 
 // ===== CMD WRITE FUNCTIONS BEGIN =====
 void enviarDados() {
-  unsigned long agora = millis();
-  unsigned long tempo_atual = agora - tempo_inicio;
-  unsigned long delta_t = agora - tempo_anterior;
-  long pulsos = contador_pulsos;
-  
-  float rpm = calcularRPM(pulsos, delta_t);
-  float omega = calcularOmega(rpm);
-  
-  // Envia: tempo_ms,rpm,omega_rad_s
-  Serial.print(tempo_atual);
-  Serial.print(",");
-  Serial.print(rpm, 2);
-  Serial.print(",");
-  Serial.println(omega, 2);
-  
-  contador_pulsos = 0;
-  tempo_anterior = agora;
+  noInterrupts();
+  bool temPulso = _novoPulso;
+  if (temPulso) {
+    tempoPulsoSeguro = _tempoPulso;
+    _novoPulso = false;
+  }
+  interrupts();
+
+  if (temPulso) {
+    float anguloRad = (2.0 * PI) / NUM_MAGNETOS;
+    float dt = tempoPulsoSeguro / 1e6;
+
+    omegaAnterior = omega;
+    float omegaBruta = anguloRad / dt;
+    omega = mediaMovel(omegaBruta);
+
+    float rpm = (omega * 60.0) / (2.0 * PI);
+    Serial.print("ω: ");         
+    Serial.print(omega, 2);
+    Serial.print(" rad/s | RPM: "); 
+    Serial.println(rpm, 1);
+
+  }
+
+  // ── Detecta parada ────────────────────────────
+  noInterrupts();
+  unsigned long ultimoPulsoLocal = _ultimoPulso;
+  interrupts();
+
+  if (micros() - ultimoPulsoLocal > 500000UL) {
+    omega = 0;
+    omegaAnterior = 0;
+    limparBuffer();
+  }
 }
 // ===== CMD WRITE FUNCTIONS END =====
