@@ -1,4 +1,5 @@
 import serial
+import serial.tools.list_ports
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from collections import deque
@@ -9,42 +10,27 @@ import time
 import threading
 import re
 
-print("""
-╔══════════════════════════════════════════════════════════════╗
-║     AQUISIÇÃO DE DADOS - SENSOR HALL (ENCODER)              ║
-║     Velocidade Angular em RPM e rad/s                       ║
-╚══════════════════════════════════════════════════════════════╝
+# Listar portas disponíveis
+ports = list(serial.tools.list_ports.comports())
 
-INSTRUÇÕES:
-1. Conecte o microcontroller (STM32) via USB
-2. O programa aguardará dados na porta serial
-3. Os dados serão salvos em um arquivo CSV
-4. O gráfico será atualizado em tempo real
+# Tenta usar COM14 ou seleciona primeira disponível
+PORTA = 'COM14'
+if not any(p.device == PORTA for p in ports):
+    if ports:
+        PORTA = ports[0].device
+    else:
+        print("Erro: Nenhuma porta serial disponível!")
+        sys.exit(1)
 
-FORMATO ESPERADO DOS DADOS:
-   tempo_ms,rpm,omega_rad_s
-   Exemplo: 1000,500,52.36
-""")
-
-# ajuste a porta
-PORTA = 'COM3'       # Windows
-# PORTA = '/dev/ttyUSB0'  # Linux
 BAUD  = 9600
 MAX_PONTOS = 1000
 
 try:
-    ser = serial.Serial(PORTA, BAUD, timeout=0)
-    print(f"\n✓ CONECTADO na porta {PORTA} com baudrate {BAUD}")
-    time.sleep(1)  # Aguarda inicialização
+    ser = serial.Serial(PORTA, BAUD, timeout=1)
+    time.sleep(1)
     start_time = time.time()
 except serial.SerialException as e:
-    print(f"\n✗ ERRO: Não conseguiu conectar na porta {PORTA}")
-    print(f"   Detalhes: {e}")
-    print("\n   SOLUÇÃO:")
-    print("   1. Verifique se o dispositivo está conectado via USB")
-    print("   2. Abra o Gerenciador de Dispositivos e procure por 'COM3'")
-    print("   3. Se estiver em outra porta, altere a variável PORTA no código")
-    print("   4. Execute 'teste_porta_serial.py' para diagnosticar")
+    print(f"Erro: Não conectou em {PORTA}")
     sys.exit(1)
 
 tempo_data = deque(maxlen=MAX_PONTOS)
@@ -58,8 +44,7 @@ current_setpoint = None
 arquivo_csv = f"medicao_{datetime.now().strftime('%H%M%S')}.csv"
 csvfile = open(arquivo_csv, 'w', newline='')
 writer = csv.writer(csvfile)
-writer.writerow(['tempo_s', 'rpm', 'omega_rad_s', 'setpoint'])
-print(f"✓ Arquivo CSV criado: {arquivo_csv}\n")
+writer.writerow(['tempo_s', 'omega_rad_s', 'rpm', 'setpoint'])
 
 fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
 fig.suptitle('Velocidade Angular — Sensor Hall')
@@ -95,7 +80,6 @@ stop_event = threading.Event()
 def sender(ser, stop_event):
     global current_setpoint
     """Thread que recebe comandos do console e os envia pela serial."""
-    print("\nDigita um comando e press Enter para enviar. Digite 'exit' para sair do console de envio.")
     while not stop_event.is_set():
         try:
             cmd = input()
@@ -112,28 +96,33 @@ def sender(ser, stop_event):
         if cmd.lower() == 'exit':
             stop_event.set()
             break
+        
+        # Validar entrada
         try:
-            ser.write((cmd + '\n').encode('utf-8'))
-            print(f"> enviado: {cmd}")
-            try:
-                set_value = float(cmd)
-            except ValueError:
-                set_value = None
-            if set_value is not None:
+            set_value = float(cmd)
+            if 0 <= set_value <= 100:
+                ser.write((cmd + '\n').encode('utf-8'))
                 with setpoint_lock:
                     current_setpoint = set_value
+            else:
+                print(f"Valor inválido (0-100)")
+        except ValueError:
+            print(f"Erro: Digite um número")
         except Exception as e:
-            print(f"Erro ao enviar: {e}")
-            stop_event.set()
-            break
+            print(f"Erro: {e}")
 
 def atualiza(frame):
     global last_recv_ts, last_zero_appended, recv_buffer
     # leitura não bloqueante da serial para evitar delay de timeout
     max_per_frame = 50
-    data = ser.read(ser.in_waiting or 1)
-    if data:
-        recv_buffer.extend(data)
+    
+    try:
+        data = ser.read(ser.in_waiting or 1)
+        if data:
+            recv_buffer.extend(data)
+    except Exception:
+        return
+    
     lines = recv_buffer.split(b'\n')
     recv_buffer = lines.pop() if lines else bytearray()
 
@@ -155,8 +144,6 @@ def atualiza(frame):
                 t = t_raw / 1000.0 if t_raw > 1000.0 else t_raw
             except ValueError:
                 dados_recebidos['erros'] += 1
-                if dados_recebidos['erros'] <= 3:
-                    print(f"  Erro ao converter CSV: {linha}")
                 continue
         else:
             # tenta reconhecer formatos legíveis como: "ω: 52.36 rad/s | RPM: 500"
@@ -172,33 +159,28 @@ def atualiza(frame):
                     t = time.time() - start_time
                 except ValueError:
                     dados_recebidos['erros'] += 1
-                    if dados_recebidos['erros'] <= 3:
-                        print(f"  Erro ao converter valores: {linha}")
                     continue
             else:
                 nums = re.findall(r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?', linha)
                 if len(nums) == 2:
                     try:
-                        a = float(nums[0])
-                        b = float(nums[1])
+                        val1 = float(nums[0])
+                        val2 = float(nums[1])
                     except ValueError:
                         dados_recebidos['erros'] += 1
                         continue
                     lowline = linha.lower()
                     if 'rad' in lowline or 'ω' in lowline or 'omega' in lowline:
-                        omega = a; rpm = b
+                        omega = val1; rpm = val2
                     elif 'rpm' in lowline:
-                        rpm = a; omega = b
+                        rpm = val1; omega = val2
                     else:
-                        omega = a; rpm = b
+                        omega = val1; rpm = val2
                     t = time.time() - start_time
                 elif len(nums) == 1:
-                    # linha com um único número — provavelmente eco de comando ou valor isolado; ignore
                     continue
                 else:
                     dados_recebidos['erros'] += 1
-                    if dados_recebidos['erros'] <= 3:
-                        print(f"  Formato inválido: {linha}")
                     continue
         # grava dados (tempo em segundos)
         tempo_data.append(t)
@@ -206,13 +188,11 @@ def atualiza(frame):
         omega_data.append(omega)
         with setpoint_lock:
             setpoint_data.append(current_setpoint if current_setpoint is not None else 0.0)
-            writer.writerow([t, rpm, omega, current_setpoint if current_setpoint is not None else ''])
+            writer.writerow([t, omega, rpm, current_setpoint if current_setpoint is not None else ''])
             csvfile.flush()
         last_recv_ts = time.time()
 
         dados_recebidos['count'] += 1
-        if dados_recebidos['count'] % 10 == 0:
-            print(f"  {dados_recebidos['count']} pontos adquiridos")
 
     now = time.time()
     if last_recv_ts is None or (now - last_recv_ts) > zero_interval:
@@ -252,11 +232,8 @@ def atualiza(frame):
     plt.tight_layout(rect=[0, 0, 1, 0.96])
 
 try:
-    print("\n" + "="*60)
-    print("→ INICIANDO AQUISIÇÃO DE DADOS")
-    print("="*60)
-    print("  Aguardando dados na porta serial...")
-    print("  (Pressione Ctrl+C para parar)\n")
+    print(f"Porta: {PORTA} | Baudrate: {BAUD}")
+    print("Digite valores (0-100):\n")
     
     # inicia thread de envio (entrada do console -> serial)
     sender_thread = threading.Thread(target=sender, args=(ser, stop_event), daemon=True)
@@ -265,9 +242,9 @@ try:
     ani = animation.FuncAnimation(fig, atualiza, interval=25, cache_frame_data=False)
     plt.show()
 except KeyboardInterrupt:
-    print("\n\n✓ Parado pelo usuário (Ctrl+C pressionado)")
+    pass
 except Exception as e:
-    print(f"\n✗ Erro na animação: {e}")
+    print(f"Erro: {e}")
 finally:
     # sinaliza threads para encerrar
     stop_event.set()
@@ -284,21 +261,5 @@ finally:
     except Exception:
         pass
     
-    print("\n" + "="*60)
-    print("RESUMO DA AQUISIÇÃO")
-    print("="*60)
-    print(f"  Dados adquiridos: {dados_recebidos['count']} pontos")
-    print(f"  Erros de leitura: {dados_recebidos['erros']}")
-    print(f"  Arquivo salvo: {arquivo_csv}")
-    print("="*60)
-    
-    if dados_recebidos['count'] == 0:
-        print("\n  ⚠ ATENÇÃO: Nenhum dado foi recebido!")
-        print("     Verifique:")
-        print("     - Se o microcontroller está enviando dados")
-        print("     - Se a porta COM3 está correta")
-        print("     - Se o baudrate é 9600")
-        print("     - Execute 'teste_porta_serial.py' para diagnosticar")
-    else:
-        print(f"\n  ✓ Aquisição bem-sucedida!")
-        print(f"    Dados salvos em: {arquivo_csv}")
+    if dados_recebidos['count'] > 0:
+        print(f"\nArquivo: {arquivo_csv}")

@@ -1,52 +1,80 @@
 #include <Arduino.h>
 
-const int SENSOR_PIN = 2;
+// ===== ENCODER MEASUREMENT FUNCTIONS BEGIN =====
+
 const int NUM_MAGNETOS = 20;
 
-volatile unsigned long _tempoPulso = 0;
-volatile bool _novoPulso = false;
+// Intervalo mínimo entre pulsos válidos (µs).
+// Protege contra bounce e ruído elétrico.
+// 300 µs → seguro até ~10 000 RPM com 20 imãs.
+const unsigned long INTERVALO_MIN_US = 300UL;
+
+// Buffer circular: armazena o intervalo de cada pulso.
+// A soma dos NUM_MAGNETOS intervalos = tempo de 1 volta completa.
+volatile unsigned long _intervalos[NUM_MAGNETOS];
+volatile int           _idxPulso   = 0;
 volatile unsigned long _ultimoPulso = 0;
 
-// Cópia segura lida no loop
-unsigned long tempoPulsoSeguro = 0;
+// Contador de voltas completas (incrementado na ISR a cada NUM_MAGNETOS pulsos)
+volatile int _voltasContadas   = 0;
+int          _voltasProcessadas = 0;
 
-float omega = 0;
-float omegaAnterior = 0;
+// Variáveis de saída
+float omega         = 0.0f;
+float omegaAnterior = 0.0f;
 
-// ── Limite físico de aceleração ───────────────
-// Ajuste conforme seu motor. Ex: 95 rad/s² = limite razoável
-const float DELTA_OMEGA_MAX = 95.0;
+// ── EMA sobre omega por volta ─────────────────
+// Substitui a média móvel anterior.
+// Alpha = 0.15: suave mas responsivo. Aumente para resposta mais rápida.
+const float EMA_ALPHA = 0.15f;
+float _omegaEma    = 0.0f;
+bool  _emaIniciado = false;
 
-// ── Média móvel ───────────────────────────────
-const int N = 16;
-float bufOmega[N] = {};
-int bufIdx = 0;
-bool bufCheio = false;  // ← NOVO: saber se o buffer já foi preenchido
-
-float mediaMovel(float novo) {
-  bufOmega[bufIdx] = novo;
-  bufIdx = (bufIdx + 1) % N;
-  float soma = 0;
-  for (int i = 0; i < N; i++) soma += bufOmega[i];
-  return soma / N;
-}
-
+// Compatibilidade: mantém assinatura de limparBuffer() usada em cmd_write.h
 void limparBuffer() {
-  for (int i = 0; i < N; i++) bufOmega[i] = 0;
-  bufIdx = 0;
-  bufCheio = false;
+  noInterrupts();
+  memset((void*)_intervalos, 0, sizeof(_intervalos));
+  _idxPulso = 0;
+  interrupts();
+  _omegaEma    = 0.0f;
+  _emaIniciado = false;
 }
 
-// ===== ENCODER MEASUREMENT FUNCTIONS BEGIN =====
+// ── ISR ──────────────────────────────────────
 void contarPulso() {
-  unsigned long agora = micros();
+  unsigned long agora    = micros();
   unsigned long intervalo = agora - _ultimoPulso;
-  unsigned long minimoEsperado = max(_tempoPulso / 2, 1000UL);
 
-  if (intervalo < minimoEsperado) return;
+  if (intervalo < INTERVALO_MIN_US) return;  // descarta bounce/ruído
 
-  _tempoPulso = intervalo;
+  _intervalos[_idxPulso] = intervalo;
+  _idxPulso = (_idxPulso + 1) % NUM_MAGNETOS;
   _ultimoPulso = agora;
-  _novoPulso = true;
+
+  // Sinaliza volta completa a cada NUM_MAGNETOS pulsos válidos
+  static int _contLocal = 0;
+  if (++_contLocal >= NUM_MAGNETOS) {
+    _contLocal = 0;
+    _voltasContadas++;
+  }
 }
+
+// ── Calcula omega (rad/s) somando 1 volta completa ───────────────────────────
+// Cancela erros de espaçamento dos imãs: se um imã está adiantado,
+// o seguinte está atrasado na mesma proporção — a soma se mantém estável.
+float calcularOmega() {
+  unsigned long copia[NUM_MAGNETOS];
+  noInterrupts();
+  memcpy((void*)copia, (const void*)_intervalos, sizeof(copia));
+  interrupts();
+
+  unsigned long totalUs = 0;
+  for (int i = 0; i < NUM_MAGNETOS; i++) totalUs += copia[i];
+
+  if (totalUs == 0) return 0.0f;
+
+  // totalUs = período de 1 volta em µs → ω = 2π / T(s)
+  return (2.0f * PI) / (totalUs / 1e6f);
+}
+
 // ===== ENCODER MEASUREMENT FUNCTIONS END =====

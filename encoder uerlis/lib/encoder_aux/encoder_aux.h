@@ -16,7 +16,7 @@ void initialize() {
   pinMode(ENCODER_PIN, INPUT_PULLUP);
   
   // Ativa interrupção para encoder (INT0 = Pino 2)
-  attachInterrupt(digitalPinToInterrupt(ENCODER_PIN), contarPulso, FALLING);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_PIN), contarPulso, RISING);
   
   // Marca tempo inicial
   tempo_inicio = millis();
